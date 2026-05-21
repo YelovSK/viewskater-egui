@@ -148,6 +148,11 @@ impl Pane {
         }
     }
 
+    fn reset_view(&mut self) {
+        self.zoom = 1.0;
+        self.pan = egui::Vec2::ZERO;
+    }
+
     /// Try to navigate by `delta` images. Returns true if the display advanced.
     pub(crate) fn navigate(&mut self, delta: isize) -> bool {
         if self.image_paths.is_empty() {
@@ -161,14 +166,16 @@ impl Pane {
 
         if let Some(cache) = &mut self.cache {
             if let Some(t) = cache.current_texture_for(new_index) {
-                self.current_index = new_index;
-                self.current_texture = Some(t);
-
                 if delta > 0 {
                     cache.navigate_forward(new_index, &self.image_paths);
                 } else {
                     cache.navigate_backward(new_index, &self.image_paths);
                 }
+
+                let summary = cache.summary();
+                self.current_index = new_index;
+                self.current_texture = Some(t);
+                self.reset_view();
 
                 let dir = if delta > 0 { "→" } else { "←" };
                 log::debug!(
@@ -176,7 +183,7 @@ impl Pane {
                     dir,
                     new_index,
                     self.image_paths.len(),
-                    cache.summary(),
+                    summary,
                 );
                 return true;
             }
@@ -191,6 +198,7 @@ impl Pane {
         }
 
         self.current_index = index;
+        self.reset_view();
 
         if let Some(cache) = &mut self.cache {
             cache.jump_to(index, &self.image_paths);
@@ -255,6 +263,7 @@ impl Pane {
             return false;
         }
         self.current_index = clamped;
+        self.reset_view();
 
         let found_in_cache = self
             .cache
@@ -359,8 +368,7 @@ impl Pane {
 
         // Double-click: reset zoom and pan
         if response.double_clicked() {
-            self.zoom = 1.0;
-            self.pan = egui::Vec2::ZERO;
+            self.reset_view();
         }
 
         // Compute display rect with updated zoom/pan (zero-frame-delay)
