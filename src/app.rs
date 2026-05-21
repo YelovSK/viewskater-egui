@@ -43,6 +43,7 @@ pub(crate) fn paint_nav_slider(
     current_idx: usize,
     max_images: usize,
     accent: egui::Color32,
+    wheel_enabled: bool,
 ) -> SliderResult {
     if max_images <= 1 {
         return SliderResult {
@@ -75,6 +76,18 @@ pub(crate) fn paint_nav_slider(
             target = Some(idx);
         }
     }
+
+    if target.is_none() && wheel_enabled && response.hovered() && !response.dragged() {
+        let scroll = ui.input(|i| i.raw_scroll_delta.y);
+        if scroll != 0.0 {
+            let delta = if scroll > 0.0 { -1 } else { 1 };
+            let scrolled_idx = current_idx.saturating_add_signed(delta).min(max);
+            if scrolled_idx != current_idx {
+                target = Some(scrolled_idx);
+            }
+        }
+    }
+
     let released = response.drag_stopped();
 
     let rail = egui::Rect::from_min_max(
@@ -232,7 +245,15 @@ impl App {
 
         let accent = self.theme.accent;
         let result = egui::TopBottomPanel::bottom("nav")
-            .show(ctx, |ui| paint_nav_slider(ui, current_idx, max_images, accent))
+            .show(ctx, |ui| {
+                paint_nav_slider(
+                    ui,
+                    current_idx,
+                    max_images,
+                    accent,
+                    self.settings.mouse_wheel_zoom,
+                )
+            })
             .inner;
 
         self.apply_slider_result_all(result, ctx);
@@ -416,6 +437,7 @@ impl App {
                                         first[0].current_index,
                                         first[0].image_paths.len(),
                                         accent,
+                                        self.settings.mouse_wheel_zoom,
                                     )
                                 },
                             )
@@ -435,6 +457,7 @@ impl App {
                                         rest[0].current_index,
                                         rest[0].image_paths.len(),
                                         accent,
+                                        self.settings.mouse_wheel_zoom,
                                     )
                                 },
                             )
