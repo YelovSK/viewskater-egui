@@ -1,23 +1,32 @@
 use std::collections::VecDeque;
-use std::fs::OpenOptions;
-use std::io::Write;
+use std::fs::{File, OpenOptions};
+use std::io::{BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 
-use image::{DynamicImage, ImageReader, ImageResult};
+use image::{AnimationDecoder, DynamicImage, ImageFormat, ImageReader, ImageResult};
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer};
 
 const APP_NAME: &str = "viewskater-egui";
 
 const SUPPORTED_EXTENSIONS: &[&str] = &[
-    "jpg", "jpeg", "png", "bmp", "webp", "gif", "tiff", "tif", "qoi", "tga",
+    "jpg", "jpeg", "png", "apng", "bmp", "webp", "gif", "tiff", "tif", "qoi", "tga",
 ];
+const ANIMATION_CAPABLE_EXTENSIONS: &[&str] = &["gif", "png", "apng", "webp"];
 
 pub fn is_supported_image(path: &Path) -> bool {
+    has_extension(path, SUPPORTED_EXTENSIONS)
+}
+
+pub fn may_have_animation(path: &Path) -> bool {
+    has_extension(path, ANIMATION_CAPABLE_EXTENSIONS)
+}
+
+fn has_extension(path: &Path, extensions: &[&str]) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| SUPPORTED_EXTENSIONS.contains(&ext.to_lowercase().as_str()))
+        .is_some_and(|ext| extensions.iter().any(|supported| ext.eq_ignore_ascii_case(supported)))
 }
 
 pub fn enumerate_images(dir: &Path) -> Vec<PathBuf> {
@@ -52,6 +61,39 @@ pub fn enumerate_images(dir: &Path) -> Vec<PathBuf> {
 /// Convenience wrapper around ImageReader::open().with_guessed_format().decode()
 pub fn open_image(path: &Path) -> ImageResult<DynamicImage> {
     ImageReader::open(path)?.with_guessed_format()?.decode()
+}
+
+pub fn open_animation_frames(path: &Path) -> ImageResult<Option<image::Frames<'static>>> {
+    let format = ImageReader::open(path)?.with_guessed_format()?.format();
+    let file = || {
+        File::open(path)
+            .map(BufReader::new)
+            .map_err(image::ImageError::IoError)
+    };
+
+    match format {
+        Some(ImageFormat::Gif) => {
+            let decoder = image::codecs::gif::GifDecoder::new(file()?)?;
+            Ok(Some(decoder.into_frames()))
+        }
+        Some(ImageFormat::Png) => {
+            let decoder = image::codecs::png::PngDecoder::new(file()?)?;
+            if decoder.is_apng()? {
+                Ok(Some(decoder.apng()?.into_frames()))
+            } else {
+                Ok(None)
+            }
+        }
+        Some(ImageFormat::WebP) => {
+            let decoder = image::codecs::webp::WebPDecoder::new(file()?)?;
+            if decoder.has_animation() {
+                Ok(Some(decoder.into_frames()))
+            } else {
+                Ok(None)
+            }
+        }
+        _ => Ok(None),
+    }
 }
 
 /// Resolve a CLI path to a directory and an optional target filename.
