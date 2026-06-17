@@ -6,7 +6,7 @@ use eframe::egui;
 use crate::cache;
 use crate::decode::image_to_color_image;
 use crate::file_io::{self, open_image};
-use crate::settings::{ImageSortKey, SortDirection};
+use crate::settings::ImageSortOrder;
 
 const MIN_ZOOM: f32 = 0.05;
 const MAX_ZOOM: f32 = 100.0;
@@ -25,6 +25,7 @@ pub(crate) struct Pane {
     pub(crate) decode_threads: usize,
     pub(crate) selected: bool,
     pub(crate) mouse_wheel_zoom: bool,
+    pub(crate) reset_zoom_pan_on_navigation: bool,
 }
 
 impl Pane {
@@ -34,6 +35,7 @@ impl Pane {
         lru_budget_mb: usize,
         decode_threads: usize,
         mouse_wheel_zoom: bool,
+        reset_zoom_pan_on_navigation: bool,
     ) -> Self {
         Self {
             image_paths: Vec::new(),
@@ -49,6 +51,7 @@ impl Pane {
             decode_threads,
             selected: true,
             mouse_wheel_zoom,
+            reset_zoom_pan_on_navigation,
         }
     }
 
@@ -67,8 +70,7 @@ impl Pane {
         &mut self,
         path: &std::path::Path,
         ctx: &egui::Context,
-        sort_key: ImageSortKey,
-        sort_direction: SortDirection,
+        sort_order: ImageSortOrder,
     ) {
         if !path.exists() {
             log::error!("Path does not exist: {}", path.display());
@@ -76,7 +78,7 @@ impl Pane {
         }
 
         let (dir, target_filename) = file_io::resolve_path(path);
-        self.image_paths = file_io::enumerate_images(&dir, sort_key, sort_direction);
+        self.image_paths = file_io::enumerate_images(&dir, sort_order);
 
         if self.image_paths.is_empty() {
             log::warn!("No supported images found in {}", dir.display());
@@ -182,7 +184,10 @@ impl Pane {
                 let summary = cache.summary();
                 self.current_index = new_index;
                 self.current_texture = Some(t);
-                self.reset_view();
+
+                if self.reset_zoom_pan_on_navigation {
+                    self.reset_view();
+                }
 
                 let dir = if delta > 0 { "→" } else { "←" };
                 log::debug!(
@@ -205,7 +210,10 @@ impl Pane {
         }
 
         self.current_index = index;
-        self.reset_view();
+
+        if self.reset_zoom_pan_on_navigation {
+            self.reset_view();
+        }
 
         if let Some(cache) = &mut self.cache {
             cache.jump_to(index, &self.image_paths);
@@ -270,7 +278,10 @@ impl Pane {
             return false;
         }
         self.current_index = clamped;
-        self.reset_view();
+
+        if self.reset_zoom_pan_on_navigation {
+            self.reset_view();
+        }
 
         let found_in_cache = self
             .cache

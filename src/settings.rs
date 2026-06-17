@@ -166,7 +166,7 @@ pub enum ImageSortKey {
 }
 
 impl ImageSortKey {
-    const ALL: [Self; 5] = [
+    pub(crate) const ALL: [Self; 5] = [
         Self::Name,
         Self::Modified,
         Self::Created,
@@ -194,7 +194,7 @@ pub enum SortDirection {
 }
 
 impl SortDirection {
-    const ALL: [Self; 2] = [Self::Ascending, Self::Descending];
+    pub(crate) const ALL: [Self; 2] = [Self::Ascending, Self::Descending];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -202,6 +202,12 @@ impl SortDirection {
             Self::Descending => "Descending",
         }
     }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImageSortOrder {
+    pub key: ImageSortKey,
+    pub direction: SortDirection,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -216,8 +222,8 @@ pub struct AppSettings {
     pub decode_threads: usize,
     pub gpu_memory_mode: GpuMemoryMode,
     pub mouse_wheel_zoom: bool,
-    pub image_sort_key: ImageSortKey,
-    pub image_sort_direction: SortDirection,
+    pub reset_zoom_pan_on_navigation: bool,
+    pub image_sort_order: ImageSortOrder,
 }
 
 impl Default for AppSettings {
@@ -232,8 +238,8 @@ impl Default for AppSettings {
             decode_threads: 10,
             gpu_memory_mode: GpuMemoryMode::default(),
             mouse_wheel_zoom: false,
-            image_sort_key: ImageSortKey::default(),
-            image_sort_direction: SortDirection::default(),
+            reset_zoom_pan_on_navigation: true,
+            image_sort_order: ImageSortOrder::default(),
         }
     }
 }
@@ -241,7 +247,18 @@ impl Default for AppSettings {
 #[derive(Default)]
 pub struct SettingsChanges {
     pub pane_settings: bool,
-    pub sort_order: bool,
+}
+
+impl SettingsChanges {
+    pub(crate) fn between(before: &AppSettings, after: &AppSettings) -> Self {
+        Self {
+            pane_settings: after.cache_count != before.cache_count
+                || after.lru_budget_mb != before.lru_budget_mb
+                || after.decode_threads != before.decode_threads
+                || after.mouse_wheel_zoom != before.mouse_wheel_zoom
+                || after.reset_zoom_pan_on_navigation != before.reset_zoom_pan_on_navigation,
+        }
+    }
 }
 
 impl AppSettings {
@@ -344,7 +361,7 @@ pub fn show_settings_modal(
                         .corner_radius(6.0)
                         .inner_margin(10.0)
                         .show(ui, |ui|{
-                            ui.horizontal(|ui|{
+                            ui.horizontal(|ui| {
                                 toggle_switch(ui, &mut settings.mouse_wheel_zoom, "Mouse Wheel Zoom", theme);
                             });
                         });
@@ -358,6 +375,12 @@ pub fn show_settings_modal(
                             .color(theme.heading),
                     );
                     ui.add_space(4.0);
+                    ui.label(
+                        egui::RichText::new("Default sorting for newly opened folders")
+                            .size(11.0)
+                            .color(theme.muted),
+                    );
+                    ui.add_space(4.0);
                     egui::Frame::default()
                         .fill(theme.section_bg)
                         .corner_radius(6.0)
@@ -365,12 +388,12 @@ pub fn show_settings_modal(
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
                                 ui.label("Sort By");
-                                egui::ComboBox::from_id_salt("image_sort_key")
-                                    .selected_text(settings.image_sort_key.label())
+                                egui::ComboBox::from_id_salt("image_sort_order_key")
+                                    .selected_text(settings.image_sort_order.key.label())
                                     .show_ui(ui, |ui| {
                                         for sort_key in ImageSortKey::ALL {
                                             ui.selectable_value(
-                                                &mut settings.image_sort_key,
+                                                &mut settings.image_sort_order.key,
                                                 sort_key,
                                                 sort_key.label(),
                                             );
@@ -379,12 +402,12 @@ pub fn show_settings_modal(
                             });
                             ui.horizontal(|ui| {
                                 ui.label("Direction");
-                                egui::ComboBox::from_id_salt("image_sort_direction")
-                                    .selected_text(settings.image_sort_direction.label())
+                                egui::ComboBox::from_id_salt("image_sort_order_direction")
+                                    .selected_text(settings.image_sort_order.direction.label())
                                     .show_ui(ui, |ui| {
                                         for direction in SortDirection::ALL {
                                             ui.selectable_value(
-                                                &mut settings.image_sort_direction,
+                                                &mut settings.image_sort_order.direction,
                                                 direction,
                                                 direction.label(),
                                             );
@@ -426,6 +449,14 @@ pub fn show_settings_modal(
                                     ui,
                                     &mut settings.sync_zoom_pan,
                                     "Sync Zoom/Pan",
+                                    theme,
+                                );
+                            });
+                            ui.horizontal(|ui| {
+                                toggle_switch(
+                                    ui,
+                                    &mut settings.reset_zoom_pan_on_navigation,
+                                    "Reset Zoom/Pan on Navigation",
                                     theme,
                                 );
                             });
@@ -576,12 +607,5 @@ pub fn show_settings_modal(
         ctx.data_mut(|d| d.insert_temp(saved_at_id, now));
     }
 
-    SettingsChanges {
-        pane_settings: settings.cache_count != snapshot.cache_count
-            || settings.lru_budget_mb != snapshot.lru_budget_mb
-            || settings.decode_threads != snapshot.decode_threads
-            || settings.mouse_wheel_zoom != snapshot.mouse_wheel_zoom,
-        sort_order: settings.image_sort_key != snapshot.image_sort_key
-            || settings.image_sort_direction != snapshot.image_sort_direction,
-    }
+    SettingsChanges::between(&snapshot, settings)
 }

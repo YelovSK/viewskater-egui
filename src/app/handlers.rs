@@ -14,14 +14,20 @@ impl App {
 
     pub(super) fn set_dual_pane(&mut self, ctx: &egui::Context) {
         if self.panes.len() < 2 {
-            let mut pane = Pane::new(ctx, self.settings.cache_count, self.settings.lru_budget_mb, self.settings.decode_threads, self.settings.mouse_wheel_zoom);
+            let mut pane = Pane::new(
+                ctx,
+                self.settings.cache_count,
+                self.settings.lru_budget_mb,
+                self.settings.decode_threads,
+                self.settings.mouse_wheel_zoom,
+                self.settings.reset_zoom_pan_on_navigation,
+            );
             if !self.panes[0].image_paths.is_empty() {
                 if let Some(dir) = self.panes[0].image_paths[0].parent() {
                     pane.open_path(
                         dir,
                         ctx,
-                        self.settings.image_sort_key,
-                        self.settings.image_sort_direction,
+                        self.current_sort,
                     );
                     pane.jump_to(self.panes[0].current_index, ctx);
                 }
@@ -36,8 +42,7 @@ impl App {
                 pane.open_path(
                     &dir,
                     ctx,
-                    self.settings.image_sort_key,
-                    self.settings.image_sort_direction,
+                    self.current_sort,
                 );
             }
         }
@@ -52,8 +57,7 @@ impl App {
                 pane.open_path(
                     &file,
                     ctx,
-                    self.settings.image_sort_key,
-                    self.settings.image_sort_direction,
+                    self.current_sort,
                 );
             }
         }
@@ -165,6 +169,7 @@ impl App {
             pane.lru_budget_mb = self.settings.lru_budget_mb;
             pane.decode_threads = self.settings.decode_threads;
             pane.mouse_wheel_zoom = self.settings.mouse_wheel_zoom;
+            pane.reset_zoom_pan_on_navigation = self.settings.reset_zoom_pan_on_navigation;
         }
     }
 
@@ -178,8 +183,7 @@ impl App {
             pane.open_path(
                 &path,
                 ctx,
-                self.settings.image_sort_key,
-                self.settings.image_sort_direction,
+                self.current_sort,
             );
             pane.zoom = zoom;
             pane.pan = pan;
@@ -365,8 +369,7 @@ impl App {
             self.panes[0].open_path(
                 &path,
                 ctx,
-                self.settings.image_sort_key,
-                self.settings.image_sort_direction,
+                self.current_sort,
             );
             if self.panes[0].current_texture.is_some() {
                 self.perf.record_image_load();
@@ -399,15 +402,13 @@ impl App {
                     self.panes[target].open_path(
                         path,
                         ctx,
-                        self.settings.image_sort_key,
-                        self.settings.image_sort_direction,
+                        self.current_sort,
                     );
                 } else {
                     self.panes[0].open_path(
                         path,
                         ctx,
-                        self.settings.image_sort_key,
-                        self.settings.image_sort_direction,
+                        self.current_sort,
                     );
                 }
             }

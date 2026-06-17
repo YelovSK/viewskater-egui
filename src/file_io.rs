@@ -10,7 +10,7 @@ use std::time::SystemTime;
 use image::{DynamicImage, ImageReader, ImageResult};
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer};
 
-use crate::settings::{ImageSortKey, SortDirection};
+use crate::settings::{ImageSortKey, ImageSortOrder, SortDirection};
 
 const APP_NAME: &str = "viewskater-egui";
 
@@ -24,11 +24,7 @@ pub fn is_supported_image(path: &Path) -> bool {
         .is_some_and(|ext| SUPPORTED_EXTENSIONS.contains(&ext.to_lowercase().as_str()))
 }
 
-pub fn enumerate_images(
-    dir: &Path,
-    sort_key: ImageSortKey,
-    sort_direction: SortDirection,
-) -> Vec<PathBuf> {
+pub fn enumerate_images(dir: &Path, sort_order: ImageSortOrder) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         log::warn!("Failed to read directory: {}", dir.display());
         return Vec::new();
@@ -46,16 +42,16 @@ pub fn enumerate_images(
         })
         .collect();
 
-    let paths = match sort_key {
-        ImageSortKey::Name => sort_paths(entries, sort_direction, compare_names),
-        ImageSortKey::Extension => sort_paths(entries, sort_direction, compare_extensions),
+    let paths = match sort_order.key {
+        ImageSortKey::Name => sort_paths(entries, sort_order.direction, compare_names),
+        ImageSortKey::Extension => sort_paths(entries, sort_order.direction, compare_extensions),
         ImageSortKey::Modified => {
-            sort_files(entries, sort_direction, |a, b| a.modified.cmp(&b.modified))
+            sort_files(entries, sort_order.direction, |a, b| a.modified.cmp(&b.modified))
         }
         ImageSortKey::Created => {
-            sort_files(entries, sort_direction, |a, b| a.created.cmp(&b.created))
+            sort_files(entries, sort_order.direction, |a, b| a.created.cmp(&b.created))
         }
-        ImageSortKey::Size => sort_files(entries, sort_direction, |a, b| a.size.cmp(&b.size)),
+        ImageSortKey::Size => sort_files(entries, sort_order.direction, |a, b| a.size.cmp(&b.size)),
     };
 
     log::info!("Found {} images in {}", paths.len(), dir.display());
@@ -89,7 +85,7 @@ fn sort_paths(
     let mut paths: Vec<PathBuf> = entries.into_iter().map(|entry| entry.path()).collect();
     paths.sort_by(|a, b| {
         apply_sort_direction(compare(a, b), sort_direction)
-            .then_with(|| compare_names(a, b))
+            .then_with(|| apply_sort_direction(compare_names(a, b), sort_direction))
     });
     paths
 }
@@ -102,7 +98,7 @@ fn sort_files(
     let mut images: Vec<ImageFile> = entries.into_iter().map(ImageFile::new).collect();
     images.sort_by(|a, b| {
         apply_sort_direction(compare(a, b), sort_direction)
-            .then_with(|| compare_names(&a.path, &b.path))
+            .then_with(|| apply_sort_direction(compare_names(&a.path, &b.path), sort_direction))
     });
     images.into_iter().map(|image| image.path).collect()
 }
