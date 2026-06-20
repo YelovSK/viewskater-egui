@@ -90,11 +90,16 @@ fn main() -> eframe::Result {
     let log_buffer = file_io::setup_logger();
     file_io::setup_panic_hook(log_buffer.clone());
     let args = Args::parse();
+    let settings = AppSettings::load();
 
     let mut viewport = egui::ViewportBuilder::default()
-        .with_inner_size([1280.0, 720.0])
         .with_drag_and_drop(true)
         .with_app_id("viewskater-egui");
+    let startup_size = settings
+        .window
+        .inner_size
+        .unwrap_or([app::DEFAULT_WINDOW_WIDTH, app::DEFAULT_WINDOW_HEIGHT]);
+    viewport = viewport.with_inner_size(startup_size);
 
     if let Some(icon) = load_icon() {
         viewport = viewport.with_icon(std::sync::Arc::new(icon));
@@ -103,7 +108,6 @@ fn main() -> eframe::Result {
     // Build the wgpu setup using the user-selected memory mode from settings.
     // The wgpu device is created once at startup and cannot be reconfigured
     // at runtime, so changes to gpu_memory_mode only take effect on next launch.
-    let settings = AppSettings::load();
     let wgpu_setup = build_wgpu_setup(settings.gpu_memory_mode);
 
     let wgpu_options = egui_wgpu::WgpuConfiguration {
@@ -126,6 +130,7 @@ fn main() -> eframe::Result {
         viewport,
         renderer: eframe::Renderer::Wgpu,
         dithering: false,
+        persist_window: false,
         wgpu_options,
         ..Default::default()
     };

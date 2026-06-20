@@ -210,6 +210,42 @@ pub struct ImageSortOrder {
     pub direction: SortDirection,
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WindowSettings {
+    pub inner_size: Option<[f32; 2]>,
+    pub maximized: bool,
+}
+
+impl WindowSettings {
+    pub fn has_saved_state(self) -> bool {
+        self.inner_size.is_some() || self.maximized
+    }
+
+    pub fn set_maximized(&mut self, maximized: bool) -> bool {
+        if self.maximized == maximized {
+            false
+        } else {
+            self.maximized = maximized;
+            true
+        }
+    }
+
+    pub fn set_inner_size(&mut self, size: egui::Vec2) -> bool {
+        if !size.x.is_finite() || !size.y.is_finite() || size.x < 320.0 || size.y < 240.0 {
+            return false;
+        }
+
+        let size = [size.x.round(), size.y.round()];
+        if self.inner_size == Some(size) {
+            false
+        } else {
+            self.inner_size = Some(size);
+            true
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppSettings {
@@ -224,6 +260,7 @@ pub struct AppSettings {
     pub mouse_wheel_zoom: bool,
     pub reset_zoom_pan_on_navigation: bool,
     pub image_sort_order: ImageSortOrder,
+    pub window: WindowSettings,
 }
 
 impl Default for AppSettings {
@@ -240,6 +277,7 @@ impl Default for AppSettings {
             mouse_wheel_zoom: false,
             reset_zoom_pan_on_navigation: true,
             image_sort_order: ImageSortOrder::default(),
+            window: WindowSettings::default(),
         }
     }
 }

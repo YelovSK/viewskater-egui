@@ -15,8 +15,9 @@ use crate::settings::{self, AppSettings, ImageSortOrder};
 use crate::theme::UiTheme;
 
 /// Target window size in physical pixels (matches iced version behavior).
-const DEFAULT_WINDOW_WIDTH: f32 = 1280.0;
-const DEFAULT_WINDOW_HEIGHT: f32 = 720.0;
+pub(crate) const DEFAULT_WINDOW_WIDTH: f32 = 1280.0;
+pub(crate) const DEFAULT_WINDOW_HEIGHT: f32 = 720.0;
+const WINDOW_SETTINGS_SAVE_INTERVAL: f64 = 1.0;
 
 /// Cursor proximity zones for revealing UI in fullscreen mode (logical pixels).
 const FULLSCREEN_TOP_ZONE: f32 = 50.0;
@@ -116,6 +117,10 @@ pub struct App {
     pub(crate) menu_open: bool,
     pub(crate) log_buffer: Arc<Mutex<VecDeque<String>>>,
     initial_size_set: bool,
+    window_state_ready: bool,
+    last_window_state_save: f64,
+    restore_maximized_after_show_frames: u8,
+    waiting_for_restored_maximize: bool,
     title: Option<String>,
     file_receiver: Receiver<PathBuf>,
 }
@@ -130,6 +135,8 @@ impl App {
     ) -> Self {
         let theme = UiTheme::teal_dark();
         theme.apply_to_visuals(&cc.egui_ctx);
+        let has_saved_window_state = settings.window.has_saved_state();
+        let restore_maximized = settings.window.maximized;
         let mut app = Self {
             panes: vec![Pane::new(
                 &cc.egui_ctx,
@@ -150,7 +157,11 @@ impl App {
             is_fullscreen: false,
             menu_open: false,
             log_buffer,
-            initial_size_set: false,
+            initial_size_set: has_saved_window_state,
+            window_state_ready: false,
+            last_window_state_save: f64::NEG_INFINITY,
+            restore_maximized_after_show_frames: if restore_maximized { 2 } else { 0 },
+            waiting_for_restored_maximize: restore_maximized,
             title: None,
             file_receiver,
         };
@@ -217,6 +228,46 @@ impl App {
         if self.title.as_deref() != Some(title.as_str()) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
             self.title = Some(title);
+        }
+    }
+
+    fn update_window_settings(&mut self, ctx: &egui::Context) {
+        let (now, inner_rect, maximized, minimized, fullscreen) = ctx.input(|i| {
+            let viewport = i.viewport();
+            (
+                i.time,
+                viewport.inner_rect,
+                viewport.maximized.unwrap_or(false),
+                viewport.minimized.unwrap_or(false),
+                viewport.fullscreen.unwrap_or(false),
+            )
+        });
+
+        if !self.window_state_ready {
+            self.window_state_ready = true;
+            return;
+        }
+        if minimized || fullscreen {
+            return;
+        }
+        if self.waiting_for_restored_maximize {
+            if maximized {
+                self.waiting_for_restored_maximize = false;
+            } else {
+                return;
+            }
+        }
+
+        let mut changed = self.settings.window.set_maximized(maximized);
+        if !maximized {
+            if let Some(inner_rect) = inner_rect {
+                changed |= self.settings.window.set_inner_size(inner_rect.size());
+            }
+        }
+
+        if changed && now - self.last_window_state_save >= WINDOW_SETTINGS_SAVE_INTERVAL {
+            self.settings.save();
+            self.last_window_state_save = now;
         }
     }
 
@@ -469,6 +520,13 @@ impl App {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        if self.restore_maximized_after_show_frames > 0 {
+            self.restore_maximized_after_show_frames -= 1;
+            if self.restore_maximized_after_show_frames == 0 {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
+            }
+        }
+
         // Synchronize with the GPU before building the next frame.
         // Without this, wgpu's multi-stage pipeline (staging buffer → copy →
         // submit → present) can finish at variable times, causing irregular
@@ -627,5 +685,11 @@ impl eframe::App for App {
 
         // About modal (on top of everything)
         about::show_about_modal(ctx, &mut self.show_about, &self.theme);
+
+        self.update_window_settings(ctx);
+    }
+
+    fn on_exit(&mut self) {
+        self.settings.save();
     }
 }
