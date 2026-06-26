@@ -358,6 +358,18 @@ impl Pane {
         false
     }
 
+    fn constrain_pan(
+        pan: egui::Vec2,
+        available: egui::Rect,
+        display_size: egui::Vec2,
+    ) -> egui::Vec2 {
+        let available_size = available.size();
+        let max_x = ((display_size.x - available_size.x) / 2.0).max(0.0);
+        let max_y = ((display_size.y - available_size.y) / 2.0).max(0.0);
+
+        egui::vec2(pan.x.clamp(-max_x, max_x), pan.y.clamp(-max_y, max_y))
+    }
+
     /// Returns true if the user changed zoom or pan this frame.
     fn show_image(&mut self, ui: &mut egui::Ui, tex: &egui::TextureHandle) -> bool {
         let tex_size = tex.size_vec2();
@@ -408,6 +420,7 @@ impl Pane {
         // Compute display rect with updated zoom/pan (zero-frame-delay)
         let base_size = tex_size * scale;
         let display_size = base_size * self.zoom;
+        self.pan = Self::constrain_pan(self.pan, available, display_size);
         let center = available.center() + self.pan;
         let display_rect = egui::Rect::from_center_size(center, display_size);
 
