@@ -15,8 +15,9 @@ use crate::settings::{self, AppSettings, ImageSortOrder};
 use crate::theme::UiTheme;
 
 /// Target window size in physical pixels (matches iced version behavior).
-const DEFAULT_WINDOW_WIDTH: f32 = 1280.0;
-const DEFAULT_WINDOW_HEIGHT: f32 = 720.0;
+pub(crate) const DEFAULT_WINDOW_WIDTH: f32 = 1280.0;
+pub(crate) const DEFAULT_WINDOW_HEIGHT: f32 = 720.0;
+const WINDOW_SETTINGS_SAVE_INTERVAL: f64 = 1.0;
 
 /// Cursor proximity zones for revealing UI in fullscreen mode (logical pixels).
 const FULLSCREEN_TOP_ZONE: f32 = 50.0;
@@ -130,6 +131,10 @@ pub struct App {
     pub(crate) log_buffer: Arc<Mutex<VecDeque<String>>>,
     initial_size_set: bool,
     last_sent_title: Option<String>,
+    window_state_ready: bool,
+    last_window_state_save: f64,
+    restore_maximized_after_show_frames: u8,
+    waiting_for_restored_maximize: bool,
     file_receiver: Receiver<PathBuf>,
 }
 
@@ -143,6 +148,8 @@ impl App {
     ) -> Self {
         let theme = UiTheme::teal_dark();
         theme.apply_to_visuals(&cc.egui_ctx);
+        let has_saved_window_state = settings.window.has_saved_state();
+        let restore_maximized = settings.window.maximized;
         let mut app = Self {
             panes: vec![Pane::new(
                 &cc.egui_ctx,
@@ -163,17 +170,17 @@ impl App {
             is_fullscreen: false,
             menu_open: false,
             log_buffer,
-            initial_size_set: false,
+            initial_size_set: has_saved_window_state,
             last_sent_title: None,
+            window_state_ready: false,
+            last_window_state_save: f64::NEG_INFINITY,
+            restore_maximized_after_show_frames: if restore_maximized { 2 } else { 0 },
+            waiting_for_restored_maximize: restore_maximized,
             file_receiver,
         };
 
         if !paths.is_empty() {
-            app.panes[0].open_path(
-                &paths[0],
-                &cc.egui_ctx,
-                app.current_sort,
-            );
+            app.panes[0].open_path(&paths[0], &cc.egui_ctx, app.current_sort);
         }
         if paths.len() >= 2 {
             let mut pane1 = Pane::new(
@@ -184,11 +191,7 @@ impl App {
                 app.settings.mouse_wheel_zoom,
                 app.settings.reset_zoom_pan_on_navigation,
             );
-            pane1.open_path(
-                &paths[1],
-                &cc.egui_ctx,
-                app.current_sort,
-            );
+            pane1.open_path(&paths[1], &cc.egui_ctx, app.current_sort);
             app.panes.push(pane1);
         }
 
@@ -196,7 +199,8 @@ impl App {
             app.perf.record_image_load();
         }
 
-        cc.egui_ctx.options_mut(|o| o.scroll_zoom_speed = SCROLL_ZOOM_SPEED);
+        cc.egui_ctx
+            .options_mut(|o| o.scroll_zoom_speed = SCROLL_ZOOM_SPEED);
 
         app
     }
@@ -220,7 +224,9 @@ impl App {
                 format!("Left: {} | Right: {}", left, right)
             }
         } else {
-            self.panes.first().and_then(name)
+            self.panes
+                .first()
+                .and_then(name)
                 .unwrap_or_else(|| "ViewSkater".to_string())
         }
     }
@@ -230,6 +236,46 @@ impl App {
         if self.last_sent_title.as_deref() != Some(title.as_str()) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
             self.last_sent_title = Some(title);
+        }
+    }
+
+    fn update_window_settings(&mut self, ctx: &egui::Context) {
+        let (now, inner_rect, maximized, minimized, fullscreen) = ctx.input(|i| {
+            let viewport = i.viewport();
+            (
+                i.time,
+                viewport.inner_rect,
+                viewport.maximized.unwrap_or(false),
+                viewport.minimized.unwrap_or(false),
+                viewport.fullscreen.unwrap_or(false),
+            )
+        });
+
+        if !self.window_state_ready {
+            self.window_state_ready = true;
+            return;
+        }
+        if minimized || fullscreen {
+            return;
+        }
+        if self.waiting_for_restored_maximize {
+            if maximized {
+                self.waiting_for_restored_maximize = false;
+            } else {
+                return;
+            }
+        }
+
+        let mut changed = self.settings.window.set_maximized(maximized);
+        if !maximized {
+            if let Some(inner_rect) = inner_rect {
+                changed |= self.settings.window.set_inner_size(inner_rect.size());
+            }
+        }
+
+        if changed && now - self.last_window_state_save >= WINDOW_SETTINGS_SAVE_INTERVAL {
+            self.settings.save();
+            self.last_window_state_save = now;
         }
     }
 
@@ -274,8 +320,7 @@ impl App {
     }
 
     fn show_central_panel(&mut self, ctx: &egui::Context) {
-        let independent =
-            self.panes.len() >= 2 && self.dual_pane_mode == DualPaneMode::Independent;
+        let independent = self.panes.len() >= 2 && self.dual_pane_mode == DualPaneMode::Independent;
         let accent = self.theme.accent;
 
         let slider_results = egui::CentralPanel::default()
@@ -358,16 +403,14 @@ impl App {
 
                     // Pane images
                     let left_interacted = ui
-                        .allocate_new_ui(
-                            egui::UiBuilder::new().max_rect(left_rect),
-                            |ui| first[0].show_content(ui),
-                        )
+                        .allocate_new_ui(egui::UiBuilder::new().max_rect(left_rect), |ui| {
+                            first[0].show_content(ui)
+                        })
                         .inner;
                     let right_interacted = ui
-                        .allocate_new_ui(
-                            egui::UiBuilder::new().max_rect(right_rect),
-                            |ui| rest[0].show_content(ui),
-                        )
+                        .allocate_new_ui(egui::UiBuilder::new().max_rect(right_rect), |ui| {
+                            rest[0].show_content(ui)
+                        })
                         .inner;
 
                     // Sync zoom/pan across panes
@@ -422,8 +465,7 @@ impl App {
                                     egui::vec2(available.width(), strip_h),
                                 );
                                 if strip_area.contains(pos) {
-                                    let divider_center =
-                                        available.min.x + left_w + divider_w / 2.0;
+                                    let divider_center = available.min.x + left_w + divider_w / 2.0;
                                     if pos.x < divider_center {
                                         first[0].selected = !first[0].selected;
                                     } else {
@@ -492,6 +534,13 @@ impl App {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        if self.restore_maximized_after_show_frames > 0 {
+            self.restore_maximized_after_show_frames -= 1;
+            if self.restore_maximized_after_show_frames == 0 {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
+            }
+        }
+
         // Synchronize with the GPU before building the next frame.
         // Without this, wgpu's multi-stage pipeline (staging buffer → copy →
         // submit → present) can finish at variable times, causing irregular
@@ -513,10 +562,8 @@ impl eframe::App for App {
         if !self.initial_size_set {
             if let Some(ppp) = ctx.input(|i| i.viewport().native_pixels_per_point) {
                 if (ppp - 1.0).abs() > 0.01 {
-                    let logical = egui::vec2(
-                        DEFAULT_WINDOW_WIDTH / ppp,
-                        DEFAULT_WINDOW_HEIGHT / ppp,
-                    );
+                    let logical =
+                        egui::vec2(DEFAULT_WINDOW_WIDTH / ppp, DEFAULT_WINDOW_HEIGHT / ppp);
                     ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(logical));
                 }
             }
@@ -552,7 +599,10 @@ impl eframe::App for App {
 
         // Compute cache memory breakdown for FPS overlay
         let cache_mb = if self.settings.show_fps {
-            let (lru, sw) = self.panes.first().map_or((0.0, 0.0), |p| p.cache_memory_mb());
+            let (lru, sw) = self
+                .panes
+                .first()
+                .map_or((0.0, 0.0), |p| p.cache_memory_mb());
             Some((lru, sw))
         } else {
             None
@@ -621,10 +671,8 @@ impl eframe::App for App {
                 screen.max.x - text_size.x - margin * 2.0,
                 screen.min.y + margin,
             );
-            let bg_rect = egui::Rect::from_min_size(
-                pos,
-                text_size + egui::vec2(margin * 2.0, margin),
-            );
+            let bg_rect =
+                egui::Rect::from_min_size(pos, text_size + egui::vec2(margin * 2.0, margin));
             let painter = ctx.layer_painter(egui::LayerId::new(
                 egui::Order::Foreground,
                 egui::Id::new("fullscreen_fps"),
@@ -643,13 +691,23 @@ impl eframe::App for App {
         }
 
         // Settings modal — auto-saves on any change inside the modal.
-        let settings_changes =
-            settings::show_settings_modal(ctx, &mut self.settings, &mut self.show_settings, &self.theme);
+        let settings_changes = settings::show_settings_modal(
+            ctx,
+            &mut self.settings,
+            &mut self.show_settings,
+            &self.theme,
+        );
         if settings_changes.pane_settings {
             self.apply_settings_to_caches();
         }
 
         // About modal (on top of everything)
         about::show_about_modal(ctx, &mut self.show_about, &self.theme);
+
+        self.update_window_settings(ctx);
+    }
+
+    fn on_exit(&mut self) {
+        self.settings.save();
     }
 }

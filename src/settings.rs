@@ -28,8 +28,7 @@ fn accent_slider(
 
     // Allocate rail + handle area, then value text to the right.
     let desired = egui::vec2(slider_width, thickness);
-    let (rect, response) =
-        ui.allocate_exact_size(desired, egui::Sense::click_and_drag());
+    let (rect, response) = ui.allocate_exact_size(desired, egui::Sense::click_and_drag());
 
     // Double-click resets to default.
     if response.double_clicked() {
@@ -69,12 +68,8 @@ fn accent_slider(
     ui.painter().rect_filled(filled, rail_radius, theme.accent);
     // Handle circle.
     let center = egui::pos2(handle_x, cy);
-    ui.painter().circle(
-        center,
-        handle_radius,
-        theme.accent,
-        egui::Stroke::NONE,
-    );
+    ui.painter()
+        .circle(center, handle_radius, theme.accent, egui::Stroke::NONE);
 
     // Value text to the right.
     let text_rect = egui::Rect::from_min_size(
@@ -124,8 +119,7 @@ fn gpu_memory_radio(
 
         ui.vertical(|ui| {
             let label_response = ui.add(
-                egui::Label::new(egui::RichText::new(label).size(13.0))
-                    .sense(egui::Sense::click()),
+                egui::Label::new(egui::RichText::new(label).size(13.0)).sense(egui::Sense::click()),
             );
             if label_response.clicked() {
                 *current = value;
@@ -210,6 +204,42 @@ pub struct ImageSortOrder {
     pub direction: SortDirection,
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WindowSettings {
+    pub inner_size: Option<[f32; 2]>,
+    pub maximized: bool,
+}
+
+impl WindowSettings {
+    pub fn has_saved_state(self) -> bool {
+        self.inner_size.is_some() || self.maximized
+    }
+
+    pub fn set_maximized(&mut self, maximized: bool) -> bool {
+        if self.maximized == maximized {
+            false
+        } else {
+            self.maximized = maximized;
+            true
+        }
+    }
+
+    pub fn set_inner_size(&mut self, size: egui::Vec2) -> bool {
+        if !size.x.is_finite() || !size.y.is_finite() || size.x < 320.0 || size.y < 240.0 {
+            return false;
+        }
+
+        let size = [size.x.round(), size.y.round()];
+        if self.inner_size == Some(size) {
+            false
+        } else {
+            self.inner_size = Some(size);
+            true
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppSettings {
@@ -224,6 +254,7 @@ pub struct AppSettings {
     pub mouse_wheel_zoom: bool,
     pub reset_zoom_pan_on_navigation: bool,
     pub image_sort_order: ImageSortOrder,
+    pub window: WindowSettings,
 }
 
 impl Default for AppSettings {
@@ -240,6 +271,7 @@ impl Default for AppSettings {
             mouse_wheel_zoom: false,
             reset_zoom_pan_on_navigation: true,
             image_sort_order: ImageSortOrder::default(),
+            window: WindowSettings::default(),
         }
     }
 }
