@@ -1,47 +1,44 @@
 use std::cmp::Ordering;
 use std::collections::VecDeque;
-use std::fs::{DirEntry, OpenOptions};
-use std::io::Write;
+use std::fs::{DirEntry, File, OpenOptions};
+use std::io::{BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Once};
 use std::time::SystemTime;
 
-use image::{DynamicImage, ImageReader, ImageResult};
+use image::{AnimationDecoder, DynamicImage, ImageFormat, ImageReader, ImageResult};
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer};
 
-use crate::settings::{ImageSortKey, ImageSortOrder, SortDirection};
+use crate::settings::{ImageDiscoveryOptions, ImageSortKey, SortDirection};
 
 const APP_NAME: &str = "viewskater-egui";
 
 const SUPPORTED_EXTENSIONS: &[&str] = &[
-    "jpg", "jpeg", "png", "bmp", "webp", "gif", "tiff", "tif", "qoi", "tga",
+    "jpg", "jpeg", "jxl", "png", "apng", "bmp", "webp", "gif", "tiff", "tif", "qoi", "tga",
 ];
+const ANIMATION_CAPABLE_EXTENSIONS: &[&str] = &["gif", "png", "apng", "webp"];
+
+static REGISTER_IMAGE_DECODERS: Once = Once::new();
 
 pub fn is_supported_image(path: &Path) -> bool {
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| SUPPORTED_EXTENSIONS.contains(&ext.to_lowercase().as_str()))
+    has_extension(path, SUPPORTED_EXTENSIONS)
 }
 
-pub fn enumerate_images(dir: &Path, sort_order: ImageSortOrder) -> Vec<PathBuf> {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        log::warn!("Failed to read directory: {}", dir.display());
-        return Vec::new();
-    };
+pub fn may_have_animation(path: &Path) -> bool {
+    has_extension(path, ANIMATION_CAPABLE_EXTENSIONS)
+}
 
-    let entries: Vec<DirEntry> = entries
-        .filter_map(|e| e.ok())
-        .filter(|entry| {
-            let path = entry.path();
-            let not_hidden = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| !n.starts_with('.'));
-            not_hidden && is_supported_image(&path)
-        })
-        .collect();
+fn has_extension(path: &Path, extensions: &[&str]) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| extensions.iter().any(|supported| ext.eq_ignore_ascii_case(supported)))
+}
 
+pub fn enumerate_images(dir: &Path, opts: ImageDiscoveryOptions) -> Vec<PathBuf> {
+    let entries = enumerate_images_inner(dir, opts);
+
+    let sort_order = &opts.sort_order;
     let paths = match sort_order.key {
         ImageSortKey::Name => sort_paths(entries, sort_order.direction, compare_names),
         ImageSortKey::Extension => sort_paths(entries, sort_order.direction, compare_extensions),
@@ -56,6 +53,43 @@ pub fn enumerate_images(dir: &Path, sort_order: ImageSortOrder) -> Vec<PathBuf> 
 
     log::info!("Found {} images in {}", paths.len(), dir.display());
     paths
+}
+
+fn enumerate_images_inner(dir: &Path, opts: ImageDiscoveryOptions) -> Vec<DirEntry> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        log::warn!("Failed to read directory: {}", dir.display());
+        return Vec::new();
+    };
+
+    let mut retval = Vec::<DirEntry>::new();
+    for entry in entries.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        match entry.file_type() {
+            Ok(ftype) => {
+                if !opts.include_hidden {
+                    let is_hidden = path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .is_some_and(|n| n.starts_with('.'));
+
+                    if is_hidden {
+                        continue;
+                    }
+                };
+
+                if ftype.is_file() && is_supported_image(&path) {
+                    retval.push(entry);
+                } else if ftype.is_dir() && opts.recursive {
+                    retval.append(&mut enumerate_images_inner(&path, opts));
+                }
+            }
+            Err(err) => {
+                log::warn!("Failed to get file type for {}: {}", path.display(), err);
+            }
+        }
+    }
+
+    retval
 }
 
 struct ImageFile {
@@ -112,8 +146,8 @@ fn apply_sort_direction(ordering: Ordering, sort_direction: SortDirection) -> Or
 
 fn compare_names(a: &Path, b: &Path) -> Ordering {
     natord::compare(
-        &a.file_name().unwrap_or_default().to_string_lossy(),
-        &b.file_name().unwrap_or_default().to_string_lossy(),
+        &a.as_os_str().to_string_lossy(),
+        &b.as_os_str().to_string_lossy(),
     )
 }
 
@@ -124,9 +158,49 @@ fn compare_extensions(a: &Path, b: &Path) -> Ordering {
     )
 }
 
+fn ensure_image_decoders_registered() {
+    REGISTER_IMAGE_DECODERS.call_once(|| {
+        jxl_oxide::integration::register_image_decoding_hook();
+    });
+}
+
 /// Convenience wrapper around ImageReader::open().with_guessed_format().decode()
 pub fn open_image(path: &Path) -> ImageResult<DynamicImage> {
+    ensure_image_decoders_registered();
     ImageReader::open(path)?.with_guessed_format()?.decode()
+}
+
+pub fn open_animation_frames(path: &Path) -> ImageResult<Option<image::Frames<'static>>> {
+    let format = ImageReader::open(path)?.with_guessed_format()?.format();
+    let file = || {
+        File::open(path)
+            .map(BufReader::new)
+            .map_err(image::ImageError::IoError)
+    };
+
+    match format {
+        Some(ImageFormat::Gif) => {
+            let decoder = image::codecs::gif::GifDecoder::new(file()?)?;
+            Ok(Some(decoder.into_frames()))
+        }
+        Some(ImageFormat::Png) => {
+            let decoder = image::codecs::png::PngDecoder::new(file()?)?;
+            if decoder.is_apng()? {
+                Ok(Some(decoder.apng()?.into_frames()))
+            } else {
+                Ok(None)
+            }
+        }
+        Some(ImageFormat::WebP) => {
+            let decoder = image::codecs::webp::WebPDecoder::new(file()?)?;
+            if decoder.has_animation() {
+                Ok(Some(decoder.into_frames()))
+            } else {
+                Ok(None)
+            }
+        }
+        _ => Ok(None),
+    }
 }
 
 /// Resolve a CLI path to a directory and an optional target filename.

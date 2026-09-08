@@ -13,7 +13,9 @@ use eframe::{egui, egui_wgpu, wgpu};
 use crate::settings::{AppSettings, GpuMemoryMode};
 
 mod about;
+mod animation;
 mod app;
+mod bench;
 mod build_info;
 mod cache;
 mod decode;
@@ -31,6 +33,12 @@ mod view_animation;
 struct Args {
     /// Paths to image files or directories
     paths: Vec<PathBuf>,
+
+    /// Run the slider preview benchmark on the given folder and exit.
+    /// Simulates hovering the navigation slider and reports thumbnail
+    /// latency stats to the log.
+    #[arg(long)]
+    bench_preview: bool,
 }
 
 /// Configure eframe's wgpu setup with the user-selected MemoryHints. The hint
@@ -156,6 +164,7 @@ fn main() -> eframe::Result {
                 log_buffer,
                 settings,
                 file_rx,
+                args.bench_preview,
             )))
         }),
     )
