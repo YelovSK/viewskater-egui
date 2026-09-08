@@ -51,6 +51,7 @@
       <key>CFBundleTypeExtensions</key>
       <array>
         <string>png</string>
+        <string>apng</string>
       </array>
       <key>LSItemContentTypes</key>
       <array>
