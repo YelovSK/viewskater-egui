@@ -487,8 +487,15 @@ impl Pane {
             .map(|path| AnimationPlayer::new(path, ctx));
     }
 
+    /// Draws the current image with zoom/pan applied and handles view input.
     /// Returns true if the user changed zoom or pan this frame.
+    ///
+    /// The frame runs in this order: (1) apply a running view animation,
+    /// (2) let direct input override it, (3) start a new animation on
+    /// double-click, (4) draw. Steps 1-3 only mutate `self.zoom`/`self.pan`;
+    /// step 4 reads them once.
     fn show_image(&mut self, ui: &mut egui::Ui, tex: &egui::TextureHandle) -> bool {
+        // 0. Setup: skip for an empty pane or texture and snapshot the transform
         let tex_size = tex.size_vec2();
         let available = ui.available_rect_before_wrap();
 
@@ -501,37 +508,42 @@ impl Pane {
 
         let old_zoom = self.zoom;
         let old_pan = self.pan;
-        let now = ui.input(|i| i.time);
+        let now = ui.input(|i| i.time); // frame clock for double-click timing and the animation
 
+        // 1. Animation in progress: move zoom/pan toward its target for this frame.
         self.advance_view_animation(now, ui.ctx());
 
         let response = ui.allocate_rect(available, egui::Sense::click_and_drag());
         let scale = (available.width() / tex_size.x).min(available.height() / tex_size.y);
 
-        // Zoom: scroll wheel (when enabled) or Ctrl/Cmd+scroll, plus pinch-to-zoom
+        // 2. Direct input: applies immediately and cancels any running animation.
+        //    Zoom: scroll wheel (when enabled) or Ctrl/Cmd+scroll, plus pinch.
         if response.hovered() && (self.mouse_wheel_zoom || ui.input(|i| i.modifiers.command)) {
             self.zoom_image(ui, &response, &available);
         }
 
-        // Pan: drag
+        //    Pan: drag. Also clears a pending first click.
         if response.dragged() {
             self.last_image_click = None;
             self.view_animation = None;
             self.pan += response.drag_delta();
         }
 
-        // Double-click: toggle between fit-to-screen and 1:1.
+        // 3. Double-click: toggle fit-to-screen / 1:1 by starting an animation (applied in step 1).
         if let Some(click_pos) = self.image_double_clicked(&response, now) {
             let is_fit_to_screen = (self.zoom - 1.0).abs() < f32::EPSILON;
 
             let (target_zoom, target_pan) = if is_fit_to_screen {
                 let actual_size_zoom = 1.0 / scale;
                 if actual_size_zoom >= 1.0 {
+                    // Larger than the pane: 1:1 anchored at the click.
                     self.zoom_target(actual_size_zoom / self.zoom, click_pos, &available)
                 } else {
+                    // Smaller than the pane: 1:1 centered.
                     (actual_size_zoom, egui::Vec2::ZERO)
                 }
             } else {
+                // Back to fit-to-screen.
                 (1.0, egui::Vec2::ZERO)
             };
 
@@ -545,13 +557,13 @@ impl Pane {
             ui.ctx().request_repaint();
         }
 
-        // Compute display rect with updated zoom/pan (zero-frame-delay)
+        // 4. Draw with this frame's final zoom/pan (zero-frame-delay).
         let base_size = tex_size * scale;
         let display_size = base_size * self.zoom;
         let center = available.center() + self.pan;
         let display_rect = egui::Rect::from_center_size(center, display_size);
 
-        // Clip to the pane rect so zoomed images don't bleed into adjacent panes
+        // Clip to the pane rect so a zoomed image stays inside its own pane.
         let painter = ui.painter_at(available);
         let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
         painter.image(tex.id(), display_rect, uv, egui::Color32::WHITE);
