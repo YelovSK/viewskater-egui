@@ -4,7 +4,7 @@ use std::fs::{DirEntry, File, OpenOptions};
 use std::io::{BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Once};
 use std::time::SystemTime;
 
 use image::{AnimationDecoder, DynamicImage, ImageFormat, ImageReader, ImageResult};
@@ -15,9 +15,11 @@ use crate::settings::{ImageDiscoveryOptions, ImageSortKey, SortDirection};
 const APP_NAME: &str = "viewskater-egui";
 
 const SUPPORTED_EXTENSIONS: &[&str] = &[
-    "jpg", "jpeg", "png", "apng", "bmp", "webp", "gif", "tiff", "tif", "qoi", "tga",
+    "jpg", "jpeg", "jxl", "png", "apng", "bmp", "webp", "gif", "tiff", "tif", "qoi", "tga",
 ];
 const ANIMATION_CAPABLE_EXTENSIONS: &[&str] = &["gif", "png", "apng", "webp"];
+
+static REGISTER_IMAGE_DECODERS: Once = Once::new();
 
 pub fn is_supported_image(path: &Path) -> bool {
     has_extension(path, SUPPORTED_EXTENSIONS)
@@ -156,8 +158,15 @@ fn compare_extensions(a: &Path, b: &Path) -> Ordering {
     )
 }
 
+fn ensure_image_decoders_registered() {
+    REGISTER_IMAGE_DECODERS.call_once(|| {
+        jxl_oxide::integration::register_image_decoding_hook();
+    });
+}
+
 /// Convenience wrapper around ImageReader::open().with_guessed_format().decode()
 pub fn open_image(path: &Path) -> ImageResult<DynamicImage> {
+    ensure_image_decoders_registered();
     ImageReader::open(path)?.with_guessed_format()?.decode()
 }
 
